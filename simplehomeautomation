@@ -1,0 +1,368 @@
+1) flutter app
+import 'package:flutter/material.dart';
+import 'dart:io';
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  late WebSocket socket;
+
+  List<Map<String, String>> devices = [
+    {'name': 'DOOR LOCK', 'status': 'OFF'},
+    {'name': 'DOWNLIGHTS', 'status': 'OFF'},
+    {'name': 'BEDROOM', 'status': 'OFF'},
+    {'name': 'TV', 'status': 'OFF'},
+    {'name': 'SPEAKER R', 'status': 'OFF'},
+    {'name': 'SPEAKER L', 'status': 'OFF'},
+    {'name': 'IWATCH', 'status': 'OFF'},
+    {'name': 'AIRCND', 'status': 'OFF'},
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    connectWebSocket();
+  }
+
+  void connectWebSocket() async {
+    try {
+      socket = await WebSocket.connect('ws://esp32.local/ws');
+      socket.listen((message) {
+        print('Received from ESP32: $message');
+
+              setState(() {
+        // For this example, assume the first device is GPIO2
+        // You might later expand this to map multiple GPIOs to specific devices
+        devices[0]['status'] = message == '1' ? 'ON' : 'OFF';
+      });
+
+      });
+    } catch (e) {
+      print('WebSocket Error: $e');
+    }
+  }
+
+void sendWebSocketCommand(String device, String status) {
+  if (socket.readyState == WebSocket.open) {
+    String message;
+
+    message = 'toggle';
+
+    socket.add(message);
+    print('Sent: $message');
+  } else {
+    print('WebSocket not connected');
+  }
+}
+
+
+  void toggleDevice(Map<String, String> device) {
+    setState(() {
+      int index = devices.indexWhere((d) => d['name'] == device['name']);
+      if (index != -1) {
+        if (device['name'] == 'DOOR LOCK') {
+          devices[index]['status'] =
+              devices[index]['status'] == 'LOCKED' ? 'UNLOCK' : 'LOCKED';
+        } else {
+          devices[index]['status'] =
+              devices[index]['status'] == 'ON' ? 'OFF' : 'ON';
+        }
+        sendWebSocketCommand(devices[index]['name']!, devices[index]['status']!);
+      }
+    });
+  }
+
+  IconData getDeviceIcon(String deviceName) {
+    switch (deviceName.toUpperCase()) {
+      case 'DOOR LOCK':
+        return Icons.door_front_door;
+      case 'DOWNLIGHTS':
+        return Icons.lightbulb;
+      case 'BEDROOM':
+        return Icons.bed;
+      case 'TV':
+        return Icons.tv;
+      case 'SPEAKER R':
+      case 'SPEAKER L':
+        return Icons.speaker;
+      case 'IWATCH':
+        return Icons.watch;
+      case 'AIRCND':
+        return Icons.ac_unit;
+      default:
+        return Icons.device_unknown;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Home Automation'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'All'),
+              Tab(text: 'Living Room'),
+              Tab(text: 'Bedrooms'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            buildGrid(devices),
+            buildGrid(devices.sublist(0, 4)),
+            buildGrid(devices.sublist(4)),
+          ],
+        ),
+      ),
+    );
+  }
+
+Widget buildGrid(List<Map<String, String>> items) {
+  return Padding(
+    padding: const EdgeInsets.all(10.0),
+    child: GridView.builder(
+      itemCount: items.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: 1.0,
+      ),
+      itemBuilder: (context, index) {
+        final device = items[index];
+        final isOn = device['status'] == 'ON' || device['status'] == 'UNLOCK';
+
+        return GestureDetector(
+          onTap: () => toggleDevice(device),
+          child: Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        getDeviceIcon(device['name']!),
+                        size: 45, // Bigger icon
+                        color: Colors.blueGrey,
+                      ),
+                      const SizedBox(width: 10),
+                      RotatedBox(
+                        quarterTurns: 3,
+                        child: Transform.scale(
+                          scale: 0.7, // Smaller switch
+                          child: Switch(
+                            value: isOn,
+                            onChanged: (bool value) {
+                              setState(() {
+                                if (device['name'] == 'DOOR LOCK') {
+                                  device['status'] = value ? 'UNLOCK' : 'LOCKED';
+                                } else {
+                                  device['status'] = value ? 'ON' : 'OFF';
+                                }
+                              });
+                              sendWebSocketCommand(device['name']!, device['status']!);
+                            },
+                            activeColor: Colors.green,
+                            activeTrackColor: Colors.green[800],
+                            inactiveThumbColor: Colors.grey[700],
+                            inactiveTrackColor: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    device['name']!,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Text(
+                    device['status']!,
+                    style: const TextStyle(
+                      color: Colors.grey,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+}
+
+2) esp32 works as websocket server. everytime it connects with the network its ip changing so that why i have used the mdns so that we can ping it with its name
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <ESPmDNS.h>
+
+const char* ssid = "TP-Link_474C";
+const char* password = "55185295";
+
+bool ledState = 0;
+const int ledPin = 2;
+
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+
+void notifyClients() {
+  ws.textAll(String(ledState));
+}
+
+void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
+  AwsFrameInfo *info = (AwsFrameInfo*)arg;
+  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+    data[len] = 0;
+    if (strcmp((char*)data, "toggle") == 0) {
+      ledState = !ledState;
+      notifyClients();
+    }
+  }
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
+             void *arg, uint8_t *data, size_t len) {
+  switch (type) {
+    case WS_EVT_CONNECT:
+      Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+      break;
+    case WS_EVT_DISCONNECT:
+      Serial.printf("WebSocket client #%u disconnected\n", client->id());
+      break;
+    case WS_EVT_DATA:
+      handleWebSocketMessage(arg, data, len);
+      break;
+    case WS_EVT_PONG:
+    case WS_EVT_ERROR:
+      break;
+  }
+}
+
+void initWebSocket() {
+  ws.onEvent(onEvent);
+  server.addHandler(&ws);
+}
+
+String processor(const String& var){
+  if(var == "STATE"){
+    return ledState ? "ON" : "OFF";
+  }
+  return String();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, LOW);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+
+  Serial.print("Connected! IP address: ");
+  Serial.println(WiFi.localIP());
+
+  // Initialize mDNS
+  if (!MDNS.begin("esp32")) {
+    Serial.println("Error starting mDNS");
+    return;
+  }
+  Serial.println("mDNS responder started: http://esp32.local");
+
+  initWebSocket();
+  server.begin();
+}
+
+void loop() {
+  ws.cleanupClients();
+  digitalWrite(ledPin, ledState);
+}
+
+3) simple html, talwind css and javascript code
+
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP WebSocket Server</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-900 font-sans">
+
+  <div class="bg-teal-800 p-6 text-center">
+    <h1 class="text-white text-3xl">ESP WebSocket Server</h1>
+  </div>
+
+  <div class="max-w-xl mx-auto p-4">
+    <div class="bg-white shadow-lg rounded-lg p-6">
+      <h2 class="text-xl font-bold text-teal-700">Output - GPIO 2</h2>
+      <p class="text-lg font-medium text-gray-600">State: <span id="state" class="text-teal-600">OFF</span></p>
+      <button id="button" class="mt-4 bg-teal-600 text-white py-2 px-6 rounded-md hover:bg-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-400">Toggle</button>
+    </div>
+  </div>
+
+  <script>
+    var gateway = `ws://192.168.1.60/ws`;
+    var websocket;
+
+    window.addEventListener('load', onLoad);
+
+    function initWebSocket() {
+      console.log('Trying to open a WebSocket connection...');
+      websocket = new WebSocket(gateway);
+      websocket.onopen    = onOpen;
+      websocket.onclose   = onClose;
+      websocket.onmessage = onMessage;
+    }
+
+    function onOpen(event) {
+      console.log('Connection opened');
+    }
+
+    function onClose(event) {
+      console.log('Connection closed');
+      setTimeout(initWebSocket, 2000);
+    }
+
+    function onMessage(event) {
+      var state = event.data === "1" ? "ON" : "OFF";
+      document.getElementById('state').innerHTML = state;
+    }
+
+    function toggle() {
+      websocket.send('toggle');
+    }
+
+    function onLoad(event) {
+      initWebSocket();
+      document.getElementById('button').addEventListener('click', toggle);
+    }
+  </script>
+
+</body>
+</html>
