@@ -110,52 +110,70 @@ if __name__ == '__main__':
 
 3) esp32 acts as a websocket client
 #include <WiFi.h>
-#include <WebSocketsClient.h>
+#include <SocketIOclient.h>
+#include <ArduinoJson.h>
 
 const char* ssid = "TP-Link_474C";
 const char* password = "55185295";
+const char* host = "192.168.1.21";
+const uint16_t port = 5000;
+const char* path = "/socket.io/?EIO=4";
 
-const char* websocket_host = "192.168.1.100"; // 👉 Replace with your Flask server IP
-const uint16_t websocket_port = 5000;
-const char* websocket_path = "/socket.io/?EIO=4&transport=websocket";
+SocketIOclient socketIO;
 
-bool ledState = 0;
 const int ledPin = 2;
 
-WebSocketsClient webSocket;
+void handleDeviceUpdate(const char* payload) {
+  DynamicJsonDocument doc(1024);
+  DeserializationError error = deserializeJson(doc, payload);
 
-void sendLEDStatus() {
-  String status = ledState ? "ON" : "OFF";
-  webSocket.sendTXT(status);
-  Serial.print("Sent to server: ");
-  Serial.println(status);
-}
+  if (error) {
+    Serial.print("JSON Parse Error: ");
+    Serial.println(error.c_str());
+    return;
+  }
 
-void handleWebSocketMessage(uint8_t *payload, size_t length) {
-  payload[length] = '\0';  // Null-terminate payload
-  String message = String((char*)payload);
-  Serial.print("Received from server: ");
-  Serial.println(message);
+  if (!doc.is<JsonArray>()) return;
 
-  if (message == "toggle") {
-    ledState = !ledState;
-    sendLEDStatus(); // Send updated status back to Flask
+  const char* eventName = doc[0];
+  JsonObject data = doc[1];
+
+  if (strcmp(eventName, "device_update") == 0) {
+    const char* device = data["device"];
+    const char* status = data["status"];
+
+    if (strcmp(device, "DOOR LOCK") == 0) {
+      if (strcmp(status, "LOCKED") == 0) {
+        digitalWrite(ledPin, LOW);
+        Serial.println("LED ON: DOOR LOCKED");
+      } else if (strcmp(status, "UNLOCK") == 0) {
+        digitalWrite(ledPin, HIGH);
+        Serial.println("LED OFF: DOOR UNLOCKED");
+      }
+    }
   }
 }
 
-void webSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
+void onSocketEvent(socketIOmessageType_t type, uint8_t * payload, size_t length) {
   switch (type) {
-    case WStype_DISCONNECTED:
-      Serial.println("WebSocket disconnected");
+    case sIOtype_CONNECT:
+      Serial.println("[SocketIO] Connected.");
+      socketIO.send(sIOtype_CONNECT, "/");
       break;
 
-    case WStype_CONNECTED:
-      Serial.println("WebSocket connected");
-      webSocket.sendTXT("ESP32 connected");  // Initial hello
+    case sIOtype_EVENT:
+      Serial.print("[SocketIO] Received: ");
+      Serial.write(payload, length);
+      Serial.println();
+      handleDeviceUpdate((const char*)payload);
       break;
 
-    case WStype_TEXT:
-      handleWebSocketMessage(payload, length);
+    case sIOtype_DISCONNECT:
+      Serial.println("[SocketIO] Disconnected.");
+      break;
+
+    case sIOtype_ERROR:
+      Serial.println("[SocketIO] Error.");
       break;
 
     default:
@@ -169,23 +187,23 @@ void setup() {
   digitalWrite(ledPin, LOW);
 
   WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
+    delay(500);
+    Serial.print(".");
   }
 
-  Serial.print("Connected! IP: ");
+  Serial.println("\nWiFi connected. IP address: ");
   Serial.println(WiFi.localIP());
 
-  webSocket.begin(websocket_host, websocket_port, websocket_path);
-  webSocket.onEvent(webSocketEvent);
-  webSocket.setReconnectInterval(5000); // Auto-reconnect
+  socketIO.begin(host, port, path);
+  socketIO.onEvent(onSocketEvent);
 }
 
 void loop() {
-  webSocket.loop();                   // WebSocket handler
-  digitalWrite(ledPin, ledState);     // LED control
+  socketIO.loop();
 }
+
 
 EX-4 flutter app
 from flask import Flask, request
