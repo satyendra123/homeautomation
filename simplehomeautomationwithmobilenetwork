@@ -206,59 +206,225 @@ void loop() {
 
 
 EX-4 flutter app
-from flask import Flask, request
-from flask_socketio import SocketIO, emit
-import json
+import 'package:flutter/material.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
 
-# Store device states
-devices = {
-    'DOOR LOCK': 'LOCKED',
-    'DOWNLIGHTS': 'OFF',
-    'BEDROOM': 'OFF',
-    'TV': 'OFF',
-    'SPEAKER R': 'OFF',
-    'SPEAKER L': 'OFF',
-    'IWATCH': 'OFF',
-    'AIRCND': 'OFF'
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-@app.route('/')
-def index():
-    return "Flask-SocketIO Server Running"
+class _HomeScreenState extends State<HomeScreen> {
+  late IO.Socket socket;
 
-# Client connected
-@socketio.on('connect')
-def handle_connect():
-    print('Client connected')
-    # Send current device states on connect
-    emit('device_states', devices)
+  List<Map<String, String>> devices = [
+    {'name': 'DOOR LOCK', 'status': 'OFF'},
+    {'name': 'DOWNLIGHTS', 'status': 'OFF'},
+    {'name': 'BEDROOM', 'status': 'OFF'},
+    {'name': 'TV', 'status': 'OFF'},
+    {'name': 'SPEAKER R', 'status': 'OFF'},
+    {'name': 'SPEAKER L', 'status': 'OFF'},
+    {'name': 'IWATCH', 'status': 'OFF'},
+    {'name': 'AIRCND', 'status': 'OFF'},
+  ];
 
-# Client disconnected
-@socketio.on('disconnect')
-def handle_disconnect():
-    print('Client disconnected')
+  @override
+  void initState() {
+    super.initState();
+    connectSocketIO();
+  }
 
-# Receive command from client using 'device_status'
-@socketio.on('device_status')
-def handle_device_status(data):
-    print(f"Received command: {data}")
-    try:
-        device = data.get('device')
-        status = data.get('status')
+  void connectSocketIO() {
+    socket = IO.io('http://192.168.1.21:5000', <String, dynamic>{
+      'transports': ['websocket'],
+      'autoConnect': false,
+    });
 
-        if device in devices:
-            devices[device] = status
-            # Broadcast updated status to all clients
-            emit('device_update', {'device': device, 'status': status}, broadcast=True)
-        else:
-            print("Unknown device:", device)
-    except Exception as e:
-        print("Error handling command:", e)
+    socket.connect();
 
-if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000)
+    socket.onConnect((_) {
+      print('Connected to Flask');
+    });
+
+    socket.on('device_status', (data) {
+      print('Received from Flask: $data');
+      setState(() {
+        String deviceName = data['device'];
+        String status = data['status'];
+        int index = devices.indexWhere((d) => d['name'] == deviceName);
+        if (index != -1) {
+          devices[index]['status'] = status;
+        }
+      });
+    });
+
+    socket.onDisconnect((_) {
+      print('Disconnected from Flask');
+    });
+  }
+
+  void sendWebSocketCommand(String device, String status) {
+    if (socket.connected) {
+      final message = {'device': device, 'status': status};
+      socket.emit('device_status', message);
+      print('Sent: $message');
+    } else {
+      print('Socket not connected');
+    }
+  }
+
+  void toggleDevice(Map<String, String> device) {
+    setState(() {
+      int index = devices.indexWhere((d) => d['name'] == device['name']);
+      if (index != -1) {
+        if (device['name'] == 'DOOR LOCK') {
+          devices[index]['status'] =
+              devices[index]['status'] == 'LOCKED' ? 'UNLOCK' : 'LOCKED';
+        } else {
+          devices[index]['status'] =
+              devices[index]['status'] == 'ON' ? 'OFF' : 'ON';
+        }
+        sendWebSocketCommand(devices[index]['name']!, devices[index]['status']!);
+      }
+    });
+  }
+
+  IconData getDeviceIcon(String deviceName) {
+    switch (deviceName.toUpperCase()) {
+      case 'DOOR LOCK':
+        return Icons.door_front_door;
+      case 'DOWNLIGHTS':
+        return Icons.lightbulb;
+      case 'BEDROOM':
+        return Icons.bed;
+      case 'TV':
+        return Icons.tv;
+      case 'SPEAKER R':
+      case 'SPEAKER L':
+        return Icons.speaker;
+      case 'IWATCH':
+        return Icons.watch;
+      case 'AIRCND':
+        return Icons.ac_unit;
+      default:
+        return Icons.device_unknown;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Home Automation'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'All'),
+              Tab(text: 'Living Room'),
+              Tab(text: 'Bedrooms'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            buildGrid(devices),
+            buildGrid(devices.sublist(0, 4)),
+            buildGrid(devices.sublist(4)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildGrid(List<Map<String, String>> items) {
+    return Padding(
+      padding: const EdgeInsets.all(10.0),
+      child: GridView.builder(
+        itemCount: items.length,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 1.0,
+        ),
+        itemBuilder: (context, index) {
+          final device = items[index];
+          final isOn = device['status'] == 'ON' || device['status'] == 'UNLOCK';
+
+          return GestureDetector(
+            onTap: () => toggleDevice(device),
+            child: Card(
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(15),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          getDeviceIcon(device['name']!),
+                          size: 45,
+                          color: Colors.blueGrey,
+                        ),
+                        const SizedBox(width: 10),
+                        RotatedBox(
+                          quarterTurns: 3,
+                          child: Transform.scale(
+                            scale: 0.7,
+                            child: Switch(
+                              value: isOn,
+                              onChanged: (bool value) {
+                                setState(() {
+                                  if (device['name'] == 'DOOR LOCK') {
+                                    device['status'] =
+                                        value ? 'UNLOCK' : 'LOCKED';
+                                  } else {
+                                    device['status'] = value ? 'ON' : 'OFF';
+                                  }
+                                });
+                                sendWebSocketCommand(
+                                    device['name']!, device['status']!);
+                              },
+                              activeColor: Colors.green,
+                              activeTrackColor: Colors.green[800],
+                              inactiveThumbColor: Colors.grey[700],
+                              inactiveTrackColor: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      device['name']!,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    Text(
+                      device['status']!,
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
 
