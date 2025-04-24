@@ -1,29 +1,60 @@
 1) flask acts as a centralized websocket server, ESP32 + react + flutter app will works as a websocket client for this project which controls the home automation with mobile internet only
 from flask import Flask, request
 from flask_socketio import SocketIO, emit
-from flask_cors import CORS
+import json
 
 app = Flask(__name__)
-CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
+app.config['SECRET_KEY'] = 'secret!'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
+# Store device states
+devices = {
+    'DOOR LOCK': 'LOCKED',
+    'DOWNLIGHTS': 'OFF',
+    'BEDROOM': 'OFF',
+    'TV': 'OFF',
+    'SPEAKER R': 'OFF',
+    'SPEAKER L': 'OFF',
+    'IWATCH': 'OFF',
+    'AIRCND': 'OFF'
+}
+
+@app.route('/')
+def index():
+    return "Flask-SocketIO Server Running"
+
+# Client connected
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected:', request.sid)
-    emit('status', 'connected to cloud')
+    print('Client connected')
+    # Send current device states on connect
+    emit('device_states', devices)
 
-@socketio.on('message')
-def handle_message(data):
-    print('Received:', data)
-    # Broadcast to all clients
-    emit('message', data, broadcast=True)
-
+# Client disconnected
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected:', request.sid)
+    print('Client disconnected')
+
+# Receive command from client using 'device_status'
+@socketio.on('device_status')
+def handle_device_status(data):
+    print(f"Received command: {data}")
+    try:
+        device = data.get('device')
+        status = data.get('status')
+
+        if device in devices:
+            devices[device] = status
+            # Broadcast updated status to all clients
+            emit('device_update', {'device': device, 'status': status}, broadcast=True)
+        else:
+            print("Unknown device:", device)
+    except Exception as e:
+        print("Error handling command:", e)
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000)
+
 
 2) html, talwind css, javascript acts as a websocket client
 <!DOCTYPE HTML>
@@ -169,228 +200,59 @@ void loop() {
 }
 
 EX-4 flutter app
-import 'package:flutter/material.dart';
-import 'dart:io';
-import 'package:web_socket_channel/web_socket_channel.dart';
+from flask import Flask, request
+from flask_socketio import SocketIO, emit
+import json
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
+# Store device states
+devices = {
+    'DOOR LOCK': 'LOCKED',
+    'DOWNLIGHTS': 'OFF',
+    'BEDROOM': 'OFF',
+    'TV': 'OFF',
+    'SPEAKER R': 'OFF',
+    'SPEAKER L': 'OFF',
+    'IWATCH': 'OFF',
+    'AIRCND': 'OFF'
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  late WebSocketChannel socketChannel;
+@app.route('/')
+def index():
+    return "Flask-SocketIO Server Running"
 
-  List<Map<String, String>> devices = [
-    {'name': 'DOOR LOCK', 'status': 'OFF'},
-    {'name': 'DOWNLIGHTS', 'status': 'OFF'},
-    {'name': 'BEDROOM', 'status': 'OFF'},
-    {'name': 'TV', 'status': 'OFF'},
-    {'name': 'SPEAKER R', 'status': 'OFF'},
-    {'name': 'SPEAKER L', 'status': 'OFF'},
-    {'name': 'IWATCH', 'status': 'OFF'},
-    {'name': 'AIRCND', 'status': 'OFF'},
-  ];
+# Client connected
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+    # Send current device states on connect
+    emit('device_states', devices)
 
-  @override
-  void initState() {
-    super.initState();
-    connectWebSocket();
-  }
+# Client disconnected
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Client disconnected')
 
-  // Connect to Flask WebSocket server
-  void connectWebSocket() {
-    try {
-      socketChannel = WebSocketChannel.connect(
-        Uri.parse('ws://<your_flask_server_ip>:5000/socket.io/?EIO=4&transport=websocket'),
-      );
+# Receive command from client using 'device_status'
+@socketio.on('device_status')
+def handle_device_status(data):
+    print(f"Received command: {data}")
+    try:
+        device = data.get('device')
+        status = data.get('status')
 
-      socketChannel.stream.listen((message) {
-        print('Received from Flask: $message');
-        setState(() {
-          // Process the incoming message
-          // This part depends on the data structure sent by Flask
-          var messageData = message;
-          if (messageData.contains('device')) {
-            String deviceName = messageData['device'];
-            String status = messageData['status'];
-            int index = devices.indexWhere((d) => d['name'] == deviceName);
-            if (index != -1) {
-              devices[index]['status'] = status;
-            }
-          }
-        });
-      });
-    } catch (e) {
-      print('WebSocket Error: $e');
-    }
-  }
+        if device in devices:
+            devices[device] = status
+            # Broadcast updated status to all clients
+            emit('device_update', {'device': device, 'status': status}, broadcast=True)
+        else:
+            print("Unknown device:", device)
+    except Exception as e:
+        print("Error handling command:", e)
 
-  // Send WebSocket command to Flask server
-  void sendWebSocketCommand(String device, String status) {
-    if (socketChannel.closeCode == null) {
-      String message = '{"device": "$device", "status": "$status"}';
-      socketChannel.sink.add(message);
-      print('Sent: $message');
-    } else {
-      print('WebSocket not connected');
-    }
-  }
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=5000)
 
-  // Toggle device status
-  void toggleDevice(Map<String, String> device) {
-    setState(() {
-      int index = devices.indexWhere((d) => d['name'] == device['name']);
-      if (index != -1) {
-        if (device['name'] == 'DOOR LOCK') {
-          devices[index]['status'] =
-              devices[index]['status'] == 'LOCKED' ? 'UNLOCK' : 'LOCKED';
-        } else {
-          devices[index]['status'] =
-              devices[index]['status'] == 'ON' ? 'OFF' : 'ON';
-        }
-        sendWebSocketCommand(devices[index]['name']!, devices[index]['status']!);
-      }
-    });
-  }
-
-  // Return the appropriate icon for each device
-  IconData getDeviceIcon(String deviceName) {
-    switch (deviceName.toUpperCase()) {
-      case 'DOOR LOCK':
-        return Icons.door_front_door;
-      case 'DOWNLIGHTS':
-        return Icons.lightbulb;
-      case 'BEDROOM':
-        return Icons.bed;
-      case 'TV':
-        return Icons.tv;
-      case 'SPEAKER R':
-      case 'SPEAKER L':
-        return Icons.speaker;
-      case 'IWATCH':
-        return Icons.watch;
-      case 'AIRCND':
-        return Icons.ac_unit;
-      default:
-        return Icons.device_unknown;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Home Automation'),
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'All'),
-              Tab(text: 'Living Room'),
-              Tab(text: 'Bedrooms'),
-            ],
-          ),
-        ),
-        body: TabBarView(
-          children: [
-            buildGrid(devices),
-            buildGrid(devices.sublist(0, 4)),
-            buildGrid(devices.sublist(4)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget buildGrid(List<Map<String, String>> items) {
-    return Padding(
-      padding: const EdgeInsets.all(10.0),
-      child: GridView.builder(
-        itemCount: items.length,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 1.0,
-        ),
-        itemBuilder: (context, index) {
-          final device = items[index];
-          final isOn = device['status'] == 'ON' || device['status'] == 'UNLOCK';
-
-          return GestureDetector(
-            onTap: () => toggleDevice(device),
-            child: Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          getDeviceIcon(device['name']!),
-                          size: 45,
-                          color: Colors.blueGrey,
-                        ),
-                        const SizedBox(width: 10),
-                        RotatedBox(
-                          quarterTurns: 3,
-                          child: Transform.scale(
-                            scale: 0.7,
-                            child: Switch(
-                              value: isOn,
-                              onChanged: (bool value) {
-                                setState(() {
-                                  if (device['name'] == 'DOOR LOCK') {
-                                    device['status'] =
-                                        value ? 'UNLOCK' : 'LOCKED';
-                                  } else {
-                                    device['status'] =
-                                        value ? 'ON' : 'OFF';
-                                  }
-                                });
-                                sendWebSocketCommand(device['name']!,
-                                    device['status']!);
-                              },
-                              activeColor: Colors.green,
-                              activeTrackColor: Colors.green[800],
-                              inactiveThumbColor: Colors.grey[700],
-                              inactiveTrackColor: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      device['name']!,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
-                    Text(
-                      device['status']!,
-                      style: const TextStyle(
-                        color: Colors.grey,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
