@@ -1,0 +1,170 @@
+// actually mai chahta hu ki mai dynamically kisi bhi esp32 ko control kar saku dynamically uski ip change karke. means kal ko agr mujhe koi new esp32 wifi switch lgani ho to mai kaise lgaunga us chiz ko apne app ke through
+
+#include <WiFi.h>
+#include <SPIFFS.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <SocketIOclient.h>
+#include <ArduinoJson.h>
+
+#define LED_PIN 2
+
+AsyncWebServer server(80);
+SocketIOclient socketIO;
+
+struct Config {
+  String ssid;
+  String password;
+  String ip;
+  String gateway;
+  String subnet;
+  String dns;
+  uint16_t port;
+  String mdns;
+  String socket_host;
+  uint16_t socket_port;
+  String socket_path;
+} config;
+
+const char* configPath = "/config.json";
+
+void loadConfig() {
+  if (!SPIFFS.begin(true)) return;
+  File file = SPIFFS.open(configPath);
+  if (!file) return;
+
+  DynamicJsonDocument doc(1024);
+  DeserializationError error = deserializeJson(doc, file);
+  if (error) return;
+
+  config.ssid = doc["ssid"].as<String>();
+  config.password = doc["password"].as<String>();
+  config.ip = doc["ip"].as<String>();
+  config.gateway = doc["gateway"].as<String>();
+  config.subnet = doc["subnet"].as<String>();
+  config.dns = doc["dns"].as<String>();
+  config.port = doc["port"];
+  config.mdns = doc["mdns"].as<String>();
+  config.socket_host = doc["socket_host"].as<String>();
+  config.socket_port = doc["socket_port"];
+  config.socket_path = doc["socket_path"].as<String>();
+}
+
+void saveConfig(AsyncWebServerRequest *request) {
+  if (request->hasParam("ssid", true)) {
+    config.ssid = request->getParam("ssid", true)->value();
+    config.password = request->getParam("password", true)->value();
+    config.ip = request->getParam("ip", true)->value();
+    config.gateway = request->getParam("gateway", true)->value();
+    config.subnet = request->getParam("subnet", true)->value();
+    config.dns = request->getParam("dns", true)->value();
+    config.port = request->getParam("port", true)->value().toInt();
+    config.mdns = request->getParam("mdns", true)->value();
+    config.socket_host = request->getParam("socket_host", true)->value();
+    config.socket_port = request->getParam("socket_port", true)->value().toInt();
+    config.socket_path = request->getParam("socket_path", true)->value();
+
+    DynamicJsonDocument doc(1024);
+    doc["ssid"] = config.ssid;
+    doc["password"] = config.password;
+    doc["ip"] = config.ip;
+    doc["gateway"] = config.gateway;
+    doc["subnet"] = config.subnet;
+    doc["dns"] = config.dns;
+    doc["port"] = config.port;
+    doc["mdns"] = config.mdns;
+    doc["socket_host"] = config.socket_host;
+    doc["socket_port"] = config.socket_port;
+    doc["socket_path"] = config.socket_path;
+
+    File file = SPIFFS.open(configPath, FILE_WRITE);
+    if (file) {
+      serializeJson(doc, file);
+      file.close();
+    }
+    request->send(200, "text/plain", "Saved. Rebooting...");
+    delay(1000);
+    ESP.restart();
+  }
+}
+
+void handleSocketEvent(socketIOmessageType_t type, uint8_t * payload, size_t length) {
+  if (type == sIOtype_EVENT) {
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, payload);
+    const char* event = doc[0];
+    JsonObject data = doc[1];
+
+    if (String(event) == "device_update") {
+      String device = data["device"].as<String>();
+      String status = data["status"].as<String>();
+
+      if (device == "DOOR LOCK") {
+        if (status == "LOCKED") {
+          digitalWrite(LED_PIN, LOW);
+        } else if (status == "UNLOCK") {
+          digitalWrite(LED_PIN, HIGH);
+        }
+      }
+    }
+  }
+}
+
+void connectToWiFi() {
+  IPAddress local_IP, gateway, subnet, dns;
+  local_IP.fromString(config.ip);
+  gateway.fromString(config.gateway);
+  subnet.fromString(config.subnet);
+  dns.fromString(config.dns);
+
+  WiFi.config(local_IP, gateway, subnet, dns);
+  WiFi.begin(config.ssid.c_str(), config.password.c_str());
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to WiFi: " + WiFi.localIP().toString());
+}
+
+void setupWebServer() {
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    File file = SPIFFS.open("/index.html");
+    String html = file.readString();
+    file.close();
+
+    html.replace("%SSID%", config.ssid);
+    html.replace("%PASSWORD%", config.password);
+    html.replace("%IP%", config.ip);
+    html.replace("%GATEWAY%", config.gateway);
+    html.replace("%DNS%", config.dns);
+    html.replace("%SUBNET%", config.subnet);
+    html.replace("%PORT%", String(config.port));
+    html.replace("%MDNS%", config.mdns);
+    html.replace("%SOCKETHOST%", config.socket_host);
+    html.replace("%SOCKETPORT%", String(config.socket_port));
+    html.replace("%SOCKETPATH%", config.socket_path);
+
+    request->send(200, "text/html", html);
+  });
+
+  server.on("/save", HTTP_POST, saveConfig);
+  server.begin();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  SPIFFS.begin(true);
+
+  loadConfig();
+  connectToWiFi();
+  setupWebServer();
+
+  socketIO.begin(config.socket_host.c_str(), config.socket_port, config.socket_path.c_str());
+  socketIO.onEvent(handleSocketEvent);
+}
+
+void loop() {
+  socketIO.loop();
+}
