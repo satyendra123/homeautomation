@@ -62,13 +62,15 @@ if __name__ == '__main__':
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ESP WebSocket Server</title>
+  <title>ESP Socket.IO Client</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Add Socket.IO client script -->
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js" integrity="sha384-E3G8dgmZJce0TkYloIgKhnlG6ijMnE9uvE5B78Tn4oCJ+PBvBFg9JsmX8kYjGVxg" crossorigin="anonymous"></script>
 </head>
 <body class="bg-gray-100 text-gray-900 font-sans">
 
   <div class="bg-teal-800 p-6 text-center">
-    <h1 class="text-white text-3xl">ESP WebSocket Server</h1>
+    <h1 class="text-white text-3xl">ESP Socket.IO Server</h1>
   </div>
 
   <div class="max-w-xl mx-auto p-4">
@@ -80,45 +82,31 @@ if __name__ == '__main__':
   </div>
 
   <script>
-    var gateway = `ws://192.168.1.60/ws`;
-    var websocket;
+    const socket = io('http://192.168.1.21:5000');
 
-    window.addEventListener('load', onLoad);
+    socket.on('connect', () => {
+      console.log('Connected to Socket.IO server');
+    });
 
-    function initWebSocket() {
-      console.log('Trying to open a WebSocket connection...');
-      websocket = new WebSocket(gateway);
-      websocket.onopen    = onOpen;
-      websocket.onclose   = onClose;
-      websocket.onmessage = onMessage;
-    }
+    socket.on('device_update', function(data) {
+      // Assuming data = { device: "GPIO2", status: "ON" or "OFF" }
+      if (data.device === 'GPIO2') {
+        document.getElementById('state').innerText = data.status;
+      }
+    });
 
-    function onOpen(event) {
-      console.log('Connection opened');
-    }
-
-    function onClose(event) {
-      console.log('Connection closed');
-      setTimeout(initWebSocket, 2000);
-    }
-
-    function onMessage(event) {
-      var state = event.data === "1" ? "ON" : "OFF";
-      document.getElementById('state').innerHTML = state;
-    }
-
-    function toggle() {
-      websocket.send('toggle');
-    }
-
-    function onLoad(event) {
-      initWebSocket();
-      document.getElementById('button').addEventListener('click', toggle);
-    }
+    document.getElementById('button').addEventListener('click', function () {
+      // Send a toggle request
+      socket.emit('device_status', {
+        device: 'GPIO2',
+        status: document.getElementById('state').innerText === 'ON' ? 'OFF' : 'ON'
+      });
+    });
   </script>
 
 </body>
 </html>
+
 
 3) esp32 acts as a websocket client
 #include <WiFi.h>
