@@ -1,170 +1,197 @@
-// actually mai chahta hu ki mai dynamically kisi bhi esp32 ko control kar saku dynamically uski ip change karke. means kal ko agr mujhe koi new esp32 wifi switch lgani ho to mai kaise lgaunga us chiz ko apne app ke through
+// actually mai chahta hu ki mai dynamically kisi bhi esp32 ko control kar saku dynamically uski ip change karke. means kal ko agr mujhe koi new esp32 wifi switch lgani ho to mai kaise lgaunga us chiz ko apne app ke through to maine apne app me ye functionality dali hai ki
+// mai ifi ka ssid aur password ko apne mobile ke app se hi dal saku
 
 #include <WiFi.h>
-#include <SPIFFS.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
 #include <SocketIOclient.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
+#include <ESPmDNS.h>
 
-#define LED_PIN 2
+const char* default_ssid = "Redmi10";
+const char* default_password = "1234abcd";
+const char* host = "192.168.154.76";
+const uint16_t port = 5000;
+const char* path = "/socket.io/?EIO=4";
 
-AsyncWebServer server(80);
 SocketIOclient socketIO;
+Preferences preferences;
 
-struct Config {
-  String ssid;
-  String password;
-  String ip;
-  String gateway;
-  String subnet;
-  String dns;
-  uint16_t port;
-  String mdns;
-  String socket_host;
-  uint16_t socket_port;
-  String socket_path;
-} config;
+const int ledPin = 2;
 
-const char* configPath = "/config.json";
-
-void loadConfig() {
-  if (!SPIFFS.begin(true)) return;
-  File file = SPIFFS.open(configPath);
-  if (!file) return;
-
-  DynamicJsonDocument doc(1024);
-  DeserializationError error = deserializeJson(doc, file);
-  if (error) return;
-
-  config.ssid = doc["ssid"].as<String>();
-  config.password = doc["password"].as<String>();
-  config.ip = doc["ip"].as<String>();
-  config.gateway = doc["gateway"].as<String>();
-  config.subnet = doc["subnet"].as<String>();
-  config.dns = doc["dns"].as<String>();
-  config.port = doc["port"];
-  config.mdns = doc["mdns"].as<String>();
-  config.socket_host = doc["socket_host"].as<String>();
-  config.socket_port = doc["socket_port"];
-  config.socket_path = doc["socket_path"].as<String>();
+void saveWiFiCredentials(const char* ssid, const char* password) {
+  preferences.begin("wifi", false);
+  preferences.putString("ssid", ssid);
+  preferences.putString("password", password);
+  preferences.end();
 }
 
-void saveConfig(AsyncWebServerRequest *request) {
-  if (request->hasParam("ssid", true)) {
-    config.ssid = request->getParam("ssid", true)->value();
-    config.password = request->getParam("password", true)->value();
-    config.ip = request->getParam("ip", true)->value();
-    config.gateway = request->getParam("gateway", true)->value();
-    config.subnet = request->getParam("subnet", true)->value();
-    config.dns = request->getParam("dns", true)->value();
-    config.port = request->getParam("port", true)->value().toInt();
-    config.mdns = request->getParam("mdns", true)->value();
-    config.socket_host = request->getParam("socket_host", true)->value();
-    config.socket_port = request->getParam("socket_port", true)->value().toInt();
-    config.socket_path = request->getParam("socket_path", true)->value();
+void handleDeviceUpdate(const char* payload) {
+  DynamicJsonDocument doc(1024);
+  DeserializationError error = deserializeJson(doc, payload);
 
-    DynamicJsonDocument doc(1024);
-    doc["ssid"] = config.ssid;
-    doc["password"] = config.password;
-    doc["ip"] = config.ip;
-    doc["gateway"] = config.gateway;
-    doc["subnet"] = config.subnet;
-    doc["dns"] = config.dns;
-    doc["port"] = config.port;
-    doc["mdns"] = config.mdns;
-    doc["socket_host"] = config.socket_host;
-    doc["socket_port"] = config.socket_port;
-    doc["socket_path"] = config.socket_path;
+  if (error) {
+    Serial.print("JSON Parse Error: ");
+    Serial.println(error.c_str());
+    return;
+  }
 
-    File file = SPIFFS.open(configPath, FILE_WRITE);
-    if (file) {
-      serializeJson(doc, file);
-      file.close();
+  if (!doc.is<JsonArray>()) return;
+
+  const char* eventName = doc[0];
+  JsonObject data = doc[1];
+
+  if (strcmp(eventName, "device_update") == 0) {
+    const char* device = data["device"];
+    const char* status = data["status"];
+
+    if (strcmp(device, "DOOR LOCK") == 0) {
+      if (strcmp(status, "LOCKED") == 0) {
+        digitalWrite(ledPin, LOW);
+        Serial.println("LED ON: DOOR LOCKED");
+      } else if (strcmp(status, "UNLOCK") == 0) {
+        digitalWrite(ledPin, HIGH);
+        Serial.println("LED OFF: DOOR UNLOCKED");
+      }
     }
-    request->send(200, "text/plain", "Saved. Rebooting...");
-    delay(1000);
+  } else if (strcmp(eventName, "wifi_config") == 0) {
+    JsonObject wifiData = data;
+    const char* ssid = wifiData["ssid"];
+    const char* password = wifiData["password"];
+
+    Serial.printf("Received new WiFi credentials: %s / %s\n", ssid, password);
+    saveWiFiCredentials(ssid, password);
+
+    Serial.println("Restarting ESP to apply new WiFi...");
+    delay(2000);
     ESP.restart();
   }
 }
 
-void handleSocketEvent(socketIOmessageType_t type, uint8_t * payload, size_t length) {
-  if (type == sIOtype_EVENT) {
-    DynamicJsonDocument doc(1024);
-    deserializeJson(doc, payload);
-    const char* event = doc[0];
-    JsonObject data = doc[1];
+void onSocketEvent(socketIOmessageType_t type, uint8_t * payload, size_t length) {
+  switch (type) {
+    case sIOtype_CONNECT:
+      Serial.println("[SocketIO] Connected.");
+      socketIO.send(sIOtype_CONNECT, "/");
+      break;
 
-    if (String(event) == "device_update") {
-      String device = data["device"].as<String>();
-      String status = data["status"].as<String>();
+    case sIOtype_EVENT:
+      Serial.print("[SocketIO] Received: ");
+      Serial.write(payload, length);
+      Serial.println();
+      handleDeviceUpdate((const char*)payload);
+      break;
 
-      if (device == "DOOR LOCK") {
-        if (status == "LOCKED") {
-          digitalWrite(LED_PIN, LOW);
-        } else if (status == "UNLOCK") {
-          digitalWrite(LED_PIN, HIGH);
-        }
-      }
-    }
+    case sIOtype_DISCONNECT:
+      Serial.println("[SocketIO] Disconnected.");
+      break;
+
+    case sIOtype_ERROR:
+      Serial.println("[SocketIO] Error.");
+      break;
+
+    default:
+      break;
   }
 }
 
-void connectToWiFi() {
-  IPAddress local_IP, gateway, subnet, dns;
-  local_IP.fromString(config.ip);
-  gateway.fromString(config.gateway);
-  subnet.fromString(config.subnet);
-  dns.fromString(config.dns);
+void setup() {
+  Serial.begin(115200);
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, LOW);
 
-  WiFi.config(local_IP, gateway, subnet, dns);
-  WiFi.begin(config.ssid.c_str(), config.password.c_str());
+  preferences.begin("wifi", true);
+  String saved_ssid = preferences.getString("ssid", default_ssid);
+  String saved_pass = preferences.getString("password", default_password);
+  preferences.end();
+
+  Serial.printf("Connecting to WiFi: %s\n", saved_ssid.c_str());
+  WiFi.begin(saved_ssid.c_str(), saved_pass.c_str());
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nConnected to WiFi: " + WiFi.localIP().toString());
-}
 
-void setupWebServer() {
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    File file = SPIFFS.open("/index.html");
-    String html = file.readString();
-    file.close();
+  Serial.println("\nWiFi connected. IP address: ");
+  Serial.println(WiFi.localIP());
 
-    html.replace("%SSID%", config.ssid);
-    html.replace("%PASSWORD%", config.password);
-    html.replace("%IP%", config.ip);
-    html.replace("%GATEWAY%", config.gateway);
-    html.replace("%DNS%", config.dns);
-    html.replace("%SUBNET%", config.subnet);
-    html.replace("%PORT%", String(config.port));
-    html.replace("%MDNS%", config.mdns);
-    html.replace("%SOCKETHOST%", config.socket_host);
-    html.replace("%SOCKETPORT%", String(config.socket_port));
-    html.replace("%SOCKETPATH%", config.socket_path);
+  if (!MDNS.begin("esp32")) {  // You can change "esp32" to any unique name
+    Serial.println("Error setting up mDNS responder!");
+  } else {
+    Serial.println("mDNS responder started. Access with http://esp32.local");
+  }
 
-    request->send(200, "text/html", html);
-  });
-
-  server.on("/save", HTTP_POST, saveConfig);
-  server.begin();
-}
-
-void setup() {
-  Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
-  SPIFFS.begin(true);
-
-  loadConfig();
-  connectToWiFi();
-  setupWebServer();
-
-  socketIO.begin(config.socket_host.c_str(), config.socket_port, config.socket_path.c_str());
-  socketIO.onEvent(handleSocketEvent);
+  socketIO.begin(host, port, path);
+  socketIO.onEvent(onSocketEvent);
 }
 
 void loop() {
   socketIO.loop();
 }
+
+//EX-2 flask code 
+from flask import Flask, request
+from flask_socketio import SocketIO, emit
+import json
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
+
+# Store device states
+devices = {
+    'DOOR LOCK': 'LOCKED',
+    'DOWNLIGHTS': 'OFF',
+    'BEDROOM': 'OFF',
+    'TV': 'OFF',
+    'SPEAKER R': 'OFF',
+    'SPEAKER L': 'OFF',
+    'IWATCH': 'OFF',
+    'AIRCND': 'OFF'
+}
+
+@app.route('/')
+def index():
+    return "Flask-SocketIO Server Running"
+
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+    emit('device_states', devices)
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Client disconnected')
+
+@socketio.on('device_status')
+def handle_device_status(data):
+    print(f"Received command: {data}")
+    try:
+        device = data.get('device')
+        status = data.get('status')
+
+        if device in devices:
+            devices[device] = status
+            emit('device_update', {'device': device, 'status': status}, broadcast=True)
+        else:
+            print("Unknown device:", device)
+    except Exception as e:
+        print("Error handling command:", e)
+        
+# Receive Wi-Fi configuration from Flutter app
+@socketio.on('wifi_config')
+def handle_wifi_config(data):
+    try:
+        mdns = data.get('mdns')
+        wifi_config = data.get('data')
+        ssid = wifi_config.get('ssid')
+        password = wifi_config.get('password')
+
+        print(f"Received Wi-Fi config from Flutter: mDNS = {mdns}, SSID = {ssid}, Password = {password}")
+        emit('wifi_config', {'ssid': ssid, 'password': password}, room='esp32')
+
+    except Exception as e:
+        print("Error handling Wi-Fi config:", e)
+
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=5000)
