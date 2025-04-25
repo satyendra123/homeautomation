@@ -229,7 +229,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void connectSocketIO() {
-    socket = IO.io('http://esp32.local:5000', <String, dynamic>{
+    socket = IO.io('http://192.168.154.76:5000', <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
     });
@@ -315,8 +315,8 @@ class _HomeScreenState extends State<HomeScreen> {
           bottom: const TabBar(
             tabs: [
               Tab(text: 'All'),
-              Tab(text: 'Living Room'),
-              Tab(text: 'Bedrooms'),
+              Tab(text: 'Livingroom'),
+              Tab(text: 'Bedroom'),
               Tab(text: 'WiFi'),
             ],
           ),
