@@ -188,13 +188,14 @@ def handle_wifi_config(data):
         password = wifi_config.get('password')
 
         print(f"Received Wi-Fi config from Flutter: mDNS = {mdns}, SSID = {ssid}, Password = {password}")
-        emit('wifi_config', {'ssid': ssid, 'password': password}, room='esp32')
+        emit('wifi_config', {'ssid': ssid, 'password': password}, broadcast=True)
 
     except Exception as e:
         print("Error handling Wi-Fi config:", e)
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000)
+
 
 3) flutter app which have the setting of sending the wifi ssid and password setting to esp32
 import 'package:flutter/material.dart';
