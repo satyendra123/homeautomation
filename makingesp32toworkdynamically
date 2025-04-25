@@ -53,7 +53,8 @@ void handleDeviceUpdate(const char* payload) {
         Serial.println("LED OFF: DOOR UNLOCKED");
       }
     }
-  } else if (strcmp(eventName, "wifi_config") == 0) {
+  }
+else if (strcmp(eventName, "wifi_config") == 0) {
     JsonObject wifiData = data;
     const char* ssid = wifiData["ssid"];
     const char* password = wifiData["password"];
