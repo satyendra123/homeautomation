@@ -1,6 +1,8 @@
 1) flutter app
 import 'package:flutter/material.dart';
-import 'dart:io';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'dart:convert';
+import 'dart:developer'; // for log()
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -10,7 +12,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late WebSocket socket;
+  late WebSocketChannel channel;
 
   List<Map<String, String>> devices = [
     {'name': 'DOOR LOCK', 'status': 'OFF'},
@@ -29,37 +31,31 @@ class _HomeScreenState extends State<HomeScreen> {
     connectWebSocket();
   }
 
-  void connectWebSocket() async {
-    try {
-      socket = await WebSocket.connect('ws://esp32.local/ws');
-      socket.listen((message) {
-        print('Received from ESP32: $message');
+  void connectWebSocket() {
+    channel = WebSocketChannel.connect(
+  Uri.parse('ws://esp32.local/ws'),
+);
 
-              setState(() {
-        // For this example, assume the first device is GPIO2
-        // You might later expand this to map multiple GPIOs to specific devices
-        devices[0]['status'] = message == '1' ? 'ON' : 'OFF';
+    channel.stream.listen((data) {
+      log('Received from ESP32: $data');
+      final Map<String, dynamic> message = jsonDecode(data);
+      setState(() {
+        String deviceName = message['device'];
+        String status = message['status'];
+        int index = devices.indexWhere((d) => d['name'] == deviceName);
+        if (index != -1) {
+          devices[index]['status'] = status;
+        }
       });
-
-      });
-    } catch (e) {
-      print('WebSocket Error: $e');
-    }
+    });
   }
 
-void sendWebSocketCommand(String device, String status) {
-  if (socket.readyState == WebSocket.open) {
-    String message;
-
-    message = 'toggle';
-
-    socket.add(message);
-    print('Sent: $message');
-  } else {
-    print('WebSocket not connected');
+  void sendWebSocketCommand(String device, String status) {
+    final message = {'device': device, 'status': status};
+    final encodedMessage = jsonEncode(message);
+    channel.sink.add(encodedMessage);
+    log('Sent: $encodedMessage');
   }
-}
-
 
   void toggleDevice(Map<String, String> device) {
     setState(() {
@@ -102,15 +98,16 @@ void sendWebSocketCommand(String device, String status) {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Home Automation'),
           bottom: const TabBar(
             tabs: [
               Tab(text: 'All'),
-              Tab(text: 'Living Room'),
-              Tab(text: 'Bedrooms'),
+              Tab(text: 'Livingroom'),
+              Tab(text: 'Bedroom'),
+              Tab(text: 'WiFi'),
             ],
           ),
         ),
@@ -119,97 +116,162 @@ void sendWebSocketCommand(String device, String status) {
             buildGrid(devices),
             buildGrid(devices.sublist(0, 4)),
             buildGrid(devices.sublist(4)),
+            wifiConfigForm(),
           ],
         ),
       ),
     );
   }
 
-Widget buildGrid(List<Map<String, String>> items) {
-  return Padding(
-    padding: const EdgeInsets.all(10.0),
-    child: GridView.builder(
-      itemCount: items.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 1.0,
-      ),
-      itemBuilder: (context, index) {
-        final device = items[index];
-        final isOn = device['status'] == 'ON' || device['status'] == 'UNLOCK';
+  Widget buildGrid(List<Map<String, String>> items) {
+    return Padding(
+      padding: const EdgeInsets.all(10.0),
+      child: GridView.builder(
+        itemCount: items.length,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 1.0,
+        ),
+        itemBuilder: (context, index) {
+          final device = items[index];
+          final isOn = device['status'] == 'ON' || device['status'] == 'UNLOCK';
 
-        return GestureDetector(
-          onTap: () => toggleDevice(device),
-          child: Card(
-            elevation: 4,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(15),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        getDeviceIcon(device['name']!),
-                        size: 45, // Bigger icon
-                        color: Colors.blueGrey,
-                      ),
-                      const SizedBox(width: 10),
-                      RotatedBox(
-                        quarterTurns: 3,
-                        child: Transform.scale(
-                          scale: 0.7, // Smaller switch
-                          child: Switch(
-                            value: isOn,
-                            onChanged: (bool value) {
-                              setState(() {
-                                if (device['name'] == 'DOOR LOCK') {
-                                  device['status'] = value ? 'UNLOCK' : 'LOCKED';
-                                } else {
-                                  device['status'] = value ? 'ON' : 'OFF';
-                                }
-                              });
-                              sendWebSocketCommand(device['name']!, device['status']!);
-                            },
-                            activeColor: Colors.green,
-                            activeTrackColor: Colors.green[800],
-                            inactiveThumbColor: Colors.grey[700],
-                            inactiveTrackColor: Colors.white,
+          return GestureDetector(
+            onTap: () => toggleDevice(device),
+            child: Card(
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(15),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          getDeviceIcon(device['name']!),
+                          size: 45,
+                          color: Colors.blueGrey,
+                        ),
+                        const SizedBox(width: 10),
+                        RotatedBox(
+                          quarterTurns: 3,
+                          child: Transform.scale(
+                            scale: 0.7,
+                            child: Switch(
+                              value: isOn,
+                              onChanged: (bool value) {
+                                setState(() {
+                                  if (device['name'] == 'DOOR LOCK') {
+                                    device['status'] =
+                                        value ? 'UNLOCK' : 'LOCKED';
+                                  } else {
+                                    device['status'] = value ? 'ON' : 'OFF';
+                                  }
+                                });
+                                sendWebSocketCommand(
+                                    device['name']!, device['status']!);
+                              },
+                              activeColor: Colors.green,
+                              activeTrackColor: Colors.green[800],
+                              inactiveThumbColor: Colors.grey[700],
+                              inactiveTrackColor: Colors.white,
+                            ),
                           ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      device['name']!,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    device['name']!,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
                     ),
-                  ),
-                  Text(
-                    device['status']!,
-                    style: const TextStyle(
-                      color: Colors.grey,
-                      fontSize: 12,
+                    Text(
+                      device['status']!,
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget wifiConfigForm() {
+    final TextEditingController mdnsController = TextEditingController();
+    final TextEditingController ssidController = TextEditingController();
+    final TextEditingController passwordController = TextEditingController();
+    final TextEditingController staticPassController = TextEditingController();
+
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Column(
+        children: [
+          TextField(
+            controller: mdnsController,
+            decoration: const InputDecoration(labelText: 'ESP32 mDNS (e.g., esp32.local)'),
           ),
-        );
-      },
-    ),
-  );
-}
+          TextField(
+            controller: ssidController,
+            decoration: const InputDecoration(labelText: 'WiFi SSID'),
+          ),
+          TextField(
+            controller: passwordController,
+            decoration: const InputDecoration(labelText: 'WiFi Password'),
+            obscureText: true,
+          ),
+          TextField(
+            controller: staticPassController,
+            decoration: const InputDecoration(labelText: 'Static Password'),
+            obscureText: true,
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton(
+            onPressed: () {
+              if (staticPassController.text == '1234') {
+                final config = {
+                  'ssid': ssidController.text,
+                  'password': passwordController.text,
+                };
+
+                final dataToSend = {
+                  'mdns': mdnsController.text,
+                  'data': config,
+                };
+
+                final encodedData = jsonEncode(dataToSend);
+
+                channel.sink.add(encodedData);
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('WiFi config sent to ESP32')),
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Invalid static password')),
+                );
+              }
+            },
+            child: const Text('Send Configuration'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 2) esp32 works as websocket server. everytime it connects with the network its ip changing so that why i have used the mdns so that we can ping it with its name
