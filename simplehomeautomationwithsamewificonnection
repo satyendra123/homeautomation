@@ -274,94 +274,219 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-2) esp32 works as websocket server. everytime it connects with the network its ip changing so that why i have used the mdns so that we can ping it with its name
+2) esp32 works as websocket server. everytime it connects with the network its ip changing so that why i have used the mdns so that we can ping it with its name. also from the app only we can change it to connect with the new wifi. and by any how it will not connect with that wifi then it goes into the AP mode where it works as a hotspot and from the mobile we will connect to that esp32 hotspot and open the app and do the settings or control it.
 #include <WiFi.h>
-#include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <AsyncTCP.h>
+#include <ArduinoJson.h>
+#include <Preferences.h>
 #include <ESPmDNS.h>
 
-const char* ssid = "TP-Link_474C";
-const char* password = "55185295";
+const char* default_ssid = "TP-Link_474C";
+const char* default_password = "55185295";
 
-bool ledState = 0;
-const int ledPin = 2;
-
+Preferences preferences;
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
-void notifyClients() {
-  ws.textAll(String(ledState));
+const int ledPin = 2;
+const int ledPin2 = 4;
+const int pwmLedChannel = 0;
+const int freq = 5000;
+const int resolution = 8;
+
+void connectWiFi(const char* ssid, const char* password) {
+  WiFi.begin(ssid, password);
+  Serial.printf("Connecting to WiFi SSID: %s\n", ssid);
+  unsigned long startAttemptTime = millis();
+
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+    delay(100);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected to WiFi successfully!");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nFailed to connect to WiFi.");
+    // Start configuration portal if failed
+    startConfigPortal();
+  }
 }
 
-void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
-  AwsFrameInfo *info = (AwsFrameInfo*)arg;
-  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
-    data[len] = 0;
-    if (strcmp((char*)data, "toggle") == 0) {
-      ledState = !ledState;
-      notifyClients();
+
+void startConfigPortal() {
+  Serial.println("Starting Configuration AP mode...");
+
+  WiFi.softAP("ESP32_Config", "12345678"); // Start Access Point with SSID and password
+
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+
+  // mDNS also for AP
+  if (!MDNS.begin("esp32")) {
+    Serial.println("Error starting mDNS in AP mode!");
+  } else {
+    Serial.println("mDNS started at http://esp32.local in AP mode");
+  }
+}
+
+
+void saveWiFiCredentials(const char* ssid, const char* password) {
+  preferences.begin("wifi", false); // open Preferences in RW mode
+  preferences.putString("ssid", ssid); // Save SSID
+  preferences.putString("password", password); // Save password
+  preferences.end();
+  
+  Serial.println("WiFi credentials saved to flash.");
+  Serial.print("New SSID: ");
+  Serial.println(ssid);
+  Serial.print("New Password: ");
+  Serial.println(password);  // You can mask the password for security reasons
+  
+  delay(500); // Small delay to ensure Preferences are saved
+
+  Serial.println("Rebooting to apply new WiFi settings...");
+  delay(1000);
+  ESP.restart(); // Restart to apply the new settings
+}
+
+
+
+void handleDeviceUpdate(const char* payload) {
+  DynamicJsonDocument doc(1024);
+  DeserializationError error = deserializeJson(doc, payload);
+
+  if (error) {
+    Serial.print("JSON Parse Error: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  if (!doc.is<JsonObject>()) return;
+
+  // Access the "data" object which contains the WiFi credentials
+  JsonObject data = doc["data"];
+
+  // Check if it contains both SSID and password
+  if (data.containsKey("ssid") && data.containsKey("password")) {
+    String newSSID = data["ssid"].as<String>();
+    String newPass = data["password"].as<String>();
+
+    Serial.println("Received new WiFi credentials via WebSocket.");
+    Serial.print("New SSID: ");
+    Serial.println(newSSID);
+    Serial.print("New Password: ");
+    Serial.println(newPass);
+
+    saveWiFiCredentials(newSSID.c_str(), newPass.c_str());
+    return; // stop further processing
+  }
+
+
+  const char* device = doc["device"];
+  const char* status = doc["status"];
+  
+  Serial.print("Device: ");
+  Serial.println(device);
+  Serial.print("Status: ");
+  Serial.println(status);
+
+  int brightness = doc.containsKey("brightness") ? doc["brightness"].as<int>() : -1;
+
+  if (strcmp(device, "DOOR LOCK") == 0) {
+    if (strcmp(status, "LOCKED") == 0) {
+      digitalWrite(ledPin, LOW);
+      Serial.println("Door locked (LED OFF)");
+    } else if (strcmp(status, "UNLOCK") == 0) {
+      digitalWrite(ledPin, HIGH);
+      Serial.println("Door unlocked (LED ON)");
+    } else {
+      Serial.println("Unknown door lock status.");
     }
   }
-}
+  else if (strcmp(device, "DOWNLIGHTS") == 0) {
+    if (strcmp(status, "ON") == 0) {
+      digitalWrite(ledPin2, HIGH);
+      Serial.println("Downlights ON");
+    } else if (strcmp(status, "OFF") == 0) {
+      digitalWrite(ledPin2, LOW);
+      Serial.println("Downlights OFF");
+    }
 
-void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
-             void *arg, uint8_t *data, size_t len) {
-  switch (type) {
-    case WS_EVT_CONNECT:
-      Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
-      break;
-    case WS_EVT_DISCONNECT:
-      Serial.printf("WebSocket client #%u disconnected\n", client->id());
-      break;
-    case WS_EVT_DATA:
-      handleWebSocketMessage(arg, data, len);
-      break;
-    case WS_EVT_PONG:
-    case WS_EVT_ERROR:
-      break;
+    if (brightness >= 0 && brightness <= 255) {
+      ledcWrite(pwmLedChannel, brightness);
+      Serial.printf("Downlights brightness set to %d\n", brightness);
+    }
+  }
+  else {
+    Serial.println("Unknown device type.");
   }
 }
 
-void initWebSocket() {
-  ws.onEvent(onEvent);
-  server.addHandler(&ws);
-}
-
-String processor(const String& var){
-  if(var == "STATE"){
-    return ledState ? "ON" : "OFF";
+// WebSocket event handler
+void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  if (type == WS_EVT_CONNECT) {
+    Serial.println("WebSocket client connected.");
+  } 
+  else if (type == WS_EVT_DISCONNECT) {
+    Serial.println("WebSocket client disconnected.");
+  } 
+  else if (type == WS_EVT_DATA) {
+    String message = String((char*)data).substring(0, len);
+    Serial.println("WebSocket message: " + message);
+    handleDeviceUpdate(message.c_str());
   }
-  return String();
 }
 
 void setup() {
   Serial.begin(115200);
+
   pinMode(ledPin, OUTPUT);
+  pinMode(ledPin2, OUTPUT);
   digitalWrite(ledPin, LOW);
+  digitalWrite(ledPin2, LOW);
+  
+  ledcSetup(pwmLedChannel, freq, resolution);
+  ledcAttachPin(ledPin2, pwmLedChannel);
 
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
+  preferences.begin("wifi", true);  // open Preferences in read-only mode
+  String saved_ssid = preferences.getString("ssid", "");
+  String saved_pass = preferences.getString("password", "");
+  preferences.end();
+
+  // Print stored WiFi credentials to the Serial Monitor
+  Serial.println("Stored WiFi credentials:");
+  Serial.print("SSID: ");
+  Serial.println(saved_ssid);
+  Serial.print("Password: ");
+  Serial.println(saved_pass);  // You can choose to mask the password for security reasons
+  
+  // If there are saved credentials, attempt to connect using them
+  if (saved_ssid.length() > 0 && saved_pass.length() > 0) {
+    connectWiFi(saved_ssid.c_str(), saved_pass.c_str());
+  } else {
+    // If no saved credentials, connect using default SSID and password
+    connectWiFi(default_ssid, default_password);
   }
 
-  Serial.print("Connected! IP address: ");
-  Serial.println(WiFi.localIP());
-
-  // Initialize mDNS
+  // Start mDNS for network discovery
   if (!MDNS.begin("esp32")) {
-    Serial.println("Error starting mDNS");
-    return;
+    Serial.println("Error starting mDNS!");
+  } else {
+    Serial.println("mDNS started at http://esp32.local");
   }
-  Serial.println("mDNS responder started: http://esp32.local");
 
-  initWebSocket();
+  // Initialize WebSocket and server
+  ws.onEvent(onWsEvent);
+  server.addHandler(&ws);
   server.begin();
 }
 
 void loop() {
   ws.cleanupClients();
-  digitalWrite(ledPin, ledState);
 }
 
 3) simple html, talwind css and javascript code
